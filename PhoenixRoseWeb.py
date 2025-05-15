@@ -1,0 +1,500 @@
+import os
+import sys
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QToolBar, QAction, QLineEdit, QWidget,
+    QVBoxLayout, QTabWidget, QPushButton, QListWidget, QLabel, QTabBar,
+    QColorDialog
+)
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEngineSettings, QWebEnginePage
+from PyQt5.QtCore import QUrl, Qt, QSize
+from PyQt5.QtGui import QFont, QColor
+
+os.environ['QTWEBENGINE_PROFILE_STORAGE'] = os.path.join(os.getcwd(), 'browser_cache')
+
+THEME_FILE = "theme_settings.txt"
+HISTORY_FILE = "history.txt"
+BOOKMARKS_FILE = "bookmarks.txt"
+
+def read_about_file():
+    about_file_path = os.path.join(os.getcwd(), 'about.py')
+    if os.path.exists(about_file_path):
+        with open(about_file_path, 'r') as file:
+            return file.read()
+    return "About file not found."
+
+class ClosableTabBar(QTabBar):
+    def __init__(self, parent=None, close_callback=None):
+        super().__init__(parent)
+        self.setMovable(True)
+        self.close_callback = close_callback
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MiddleButton:
+            tab_index = self.tabAt(event.pos())
+            if tab_index != -1 and self.close_callback:
+                self.close_callback(tab_index)
+        super().mouseReleaseEvent(event)
+
+class BrowserTab(QWidget):
+    def __init__(self, parent=None, incognito=False):
+        super().__init__(parent)
+        self.incognito = incognito
+        self.browser = QWebEngineView()
+
+        if self.incognito:
+            self.profile = QWebEngineProfile()
+            self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            self.profile.setCachePath("")
+            self.profile.setPersistentStoragePath("")
+            self.profile.settings().setAttribute(QWebEngineSettings.LocalStorageEnabled, False)
+            self.browser.setPage(QWebEnginePage(self.profile, self.browser))
+
+        self.browser.settings().setAttribute(QWebEngineSettings.PluginsEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.XSSAuditingEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.ErrorPageEnabled, True)
+        self.browser.settings().setAttribute(QWebEngineSettings.WebGLEnabled, True)
+
+        self.browser.setUrl(QUrl("https://www.google.com"))
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.browser)
+        self.setLayout(layout)
+
+class AboutWindow(QWidget):
+    def __init__(self, about_text):
+        super().__init__()
+        self.setWindowTitle("About PhoenixRose Web")
+        self.setGeometry(200, 200, 400, 300)
+        layout = QVBoxLayout()
+
+        about_label = QLabel(about_text, self)
+        about_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(about_label)
+
+        close_button = QPushButton("Close", self)
+        close_button.clicked.connect(self.close)
+        layout.addWidget(close_button)
+
+        self.setLayout(layout)
+
+class Browser(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PhoenixRose Web")
+        self.setGeometry(100, 100, 1200, 800)
+        self.dark_mode = False
+        self.incognito_mode = False
+        self.custom_primary_color = None  # store custom theme color
+
+        self.history = []
+        self.bookmarks = []
+
+        self._create_menu_bar()
+        self._create_navbar()
+        self._create_bookmarks_bar()
+        self._create_tab_widget()
+
+        self.load_history()
+        self.load_bookmarks()
+        self.load_theme()  # load saved theme or default
+        self.add_new_tab()
+        self.update_bookmarks_bar()
+
+    def closeEvent(self, event):
+        # Save history and bookmarks on close
+        self.save_history()
+        self.save_bookmarks()
+        event.accept()
+
+    def save_history(self):
+        try:
+            with open(HISTORY_FILE, "w") as f:
+                for url in self.history:
+                    f.write(url + "\n")
+        except Exception as e:
+            print(f"Error saving history: {e}")
+
+    def load_history(self):
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r") as f:
+                    self.history = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                print(f"Error loading history: {e}")
+                self.history = []
+        else:
+            self.history = []
+
+    def save_bookmarks(self):
+        try:
+            with open(BOOKMARKS_FILE, "w") as f:
+                for url in self.bookmarks:
+                    f.write(url + "\n")
+        except Exception as e:
+            print(f"Error saving bookmarks: {e}")
+
+    def load_bookmarks(self):
+        if os.path.exists(BOOKMARKS_FILE):
+            try:
+                with open(BOOKMARKS_FILE, "r") as f:
+                    self.bookmarks = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                print(f"Error loading bookmarks: {e}")
+                self.bookmarks = []
+        else:
+            self.bookmarks = []
+
+    def _create_menu_bar(self):
+        menu_bar = self.menuBar()
+
+        # File Menu
+        file_menu = menu_bar.addMenu("File")
+        new_tab_action = QAction("New Tab", self)
+        new_tab_action.triggered.connect(lambda: self.add_new_tab())
+        file_menu.addAction(new_tab_action)
+
+        close_tab_action = QAction("Close Tab", self)
+        close_tab_action.triggered.connect(lambda: self.close_tab(self.tabs.currentIndex()))
+        file_menu.addAction(close_tab_action)
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Bookmarks Menu
+        bookmarks_menu = menu_bar.addMenu("Bookmarks")
+        add_bookmark_action = QAction("Add Bookmark", self)
+        add_bookmark_action.triggered.connect(self.add_bookmark)
+        bookmarks_menu.addAction(add_bookmark_action)
+
+        manage_bookmarks_action = QAction("Manage Bookmarks", self)
+        manage_bookmarks_action.triggered.connect(self.manage_bookmarks)
+        bookmarks_menu.addAction(manage_bookmarks_action)
+
+        # History Menu
+        history_menu = menu_bar.addMenu("History")
+        show_history_action = QAction("Show History", self)
+        show_history_action.triggered.connect(self.show_history)
+        history_menu.addAction(show_history_action)
+
+        # View Menu
+        view_menu = menu_bar.addMenu("View")
+        toggle_incognito_action = QAction("Toggle Incognito Mode", self)
+        toggle_incognito_action.triggered.connect(self.toggle_incognito_mode)
+        view_menu.addAction(toggle_incognito_action)
+
+        toggle_dark_mode_action = QAction("Toggle Dark Mode", self)
+        toggle_dark_mode_action.triggered.connect(self.toggle_dark_mode)
+        view_menu.addAction(toggle_dark_mode_action)
+
+        # Themes Menu
+        themes_menu = menu_bar.addMenu("Themes")
+        # Preset themes
+        light_theme_action = QAction("Light", self)
+        light_theme_action.triggered.connect(lambda: self.apply_preset_theme("light"))
+        themes_menu.addAction(light_theme_action)
+
+        dark_theme_action = QAction("Dark", self)
+        dark_theme_action.triggered.connect(lambda: self.apply_preset_theme("dark"))
+        themes_menu.addAction(dark_theme_action)
+
+        blue_theme_action = QAction("Blue", self)
+        blue_theme_action.triggered.connect(lambda: self.apply_preset_theme("blue"))
+        themes_menu.addAction(blue_theme_action)
+
+        purple_theme_action = QAction("Purple", self)
+        purple_theme_action.triggered.connect(lambda: self.apply_preset_theme("purple"))
+        themes_menu.addAction(purple_theme_action)
+
+        custom_theme_action = QAction("Custom Color...", self)
+        custom_theme_action.triggered.connect(self.open_color_picker)
+        themes_menu.addAction(custom_theme_action)
+
+        # Help Menu
+        help_menu = menu_bar.addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def _create_navbar(self):
+        navbar = QToolBar()
+        navbar.setMovable(False)
+        navbar.setIconSize(QSize(16, 16))
+        self.addToolBar(navbar)
+
+        self.back_btn = QAction("←", self)
+        self.back_btn.triggered.connect(self.go_back)
+        navbar.addAction(self.back_btn)
+
+        self.forward_btn = QAction("→", self)
+        self.forward_btn.triggered.connect(self.go_forward)
+        navbar.addAction(self.forward_btn)
+
+        self.reload_btn = QAction("⟳", self)
+        self.reload_btn.triggered.connect(self.reload_page)
+        navbar.addAction(self.reload_btn)
+
+        home_btn = QAction("🏠", self)
+        home_btn.triggered.connect(self.navigate_home)
+        navbar.addAction(home_btn)
+
+        self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Search or enter website name")
+        self.url_bar.setFont(QFont("San Francisco", 12))
+        self.url_bar.returnPressed.connect(self.navigate_to_url)
+        navbar.addWidget(self.url_bar)
+
+    def _create_bookmarks_bar(self):
+        self.bookmark_toolbar = QToolBar("Bookmarks")
+        self.bookmark_toolbar.setMovable(False)
+        self.addToolBar(Qt.BottomToolBarArea, self.bookmark_toolbar)
+
+    def _create_tab_widget(self):
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)
+
+        self.tab_bar = ClosableTabBar(close_callback=self.close_tab)
+        self.tabs.setTabBar(self.tab_bar)
+
+        self.tabs.tabCloseRequested.connect(self.close_tab)
+        self.tabs.currentChanged.connect(self.current_tab_changed)
+        self.setCentralWidget(self.tabs)
+
+    def add_new_tab(self, url=None, incognito=False):
+        new_tab = BrowserTab(incognito=incognito)
+        if url:
+            new_tab.browser.setUrl(QUrl(url))
+        else:
+            new_tab.browser.setUrl(QUrl("https://www.google.com"))
+
+        i = self.tabs.addTab(new_tab, "New Tab")
+        self.tabs.setCurrentIndex(i)
+
+        new_tab.browser.urlChanged.connect(lambda qurl, tab=new_tab: self.update_urlbar(qurl, tab))
+        new_tab.browser.loadFinished.connect(lambda _, tab=new_tab: self.update_tab_title(tab))
+        new_tab.browser.loadFinished.connect(lambda _, tab=new_tab: self.add_to_history(tab.browser.url().toString()))
+        self.apply_theme_to_tab(new_tab)
+        return new_tab
+
+    def close_tab(self, index):
+        if self.tabs.count() < 2:
+            return
+        self.tabs.removeTab(index)
+
+    def current_tab_changed(self, index):
+        current_tab = self.tabs.widget(index)
+        if current_tab:
+            self.update_urlbar(current_tab.browser.url(), current_tab)
+            self.apply_theme_to_tab(current_tab)
+
+    def update_tab_title(self, tab):
+        title = tab.browser.page().title()
+        index = self.tabs.indexOf(tab)
+        if index != -1:
+            self.tabs.setTabText(index, title[:20] + "..." if len(title) > 23 else title)
+
+    def update_urlbar(self, qurl, tab=None):
+        if tab != self.tabs.currentWidget():
+            return
+        self.url_bar.setText(qurl.toString())
+        self.url_bar.setCursorPosition(0)
+
+    def navigate_to_url(self):
+        url_text = self.url_bar.text()
+        if not url_text.startswith(("http://", "https://")):
+            url_text = "http://" + url_text
+        qurl = QUrl(url_text)
+        if qurl.isValid():
+            current_tab = self.tabs.currentWidget()
+            if current_tab:
+                current_tab.browser.setUrl(qurl)
+
+    def go_back(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.back()
+
+    def go_forward(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.forward()
+
+    def reload_page(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.reload()
+
+    def navigate_home(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.setUrl(QUrl("https://www.google.com"))
+
+    def add_bookmark(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            url = current_tab.browser.url().toString()
+            if url not in self.bookmarks:
+                self.bookmarks.append(url)
+                self.update_bookmarks_bar()
+
+    def update_bookmarks_bar(self):
+        self.bookmark_toolbar.clear()
+        for bookmark in self.bookmarks:
+            btn = QPushButton(bookmark)
+            btn.setMaximumWidth(200)
+            btn.clicked.connect(lambda checked, url=bookmark: self.navigate_to_bookmark(url))
+            self.bookmark_toolbar.addWidget(btn)
+
+    def navigate_to_bookmark(self, url):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.setUrl(QUrl(url))
+
+    def manage_bookmarks(self):
+        # Simple popup for bookmark management can be added here later
+        pass
+
+    def show_history(self):
+        history_window = QWidget()
+        history_window.setWindowTitle("Browsing History")
+        history_window.setGeometry(300, 300, 400, 600)
+
+        layout = QVBoxLayout()
+        list_widget = QListWidget()
+        list_widget.addItems(self.history)
+        list_widget.itemClicked.connect(lambda item: self.open_history_url(item.text()))
+        layout.addWidget(list_widget)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(history_window.close)
+        layout.addWidget(close_btn)
+
+        history_window.setLayout(layout)
+        history_window.show()
+
+    def open_history_url(self, url):
+        current_tab = self.tabs.currentWidget()
+        if current_tab:
+            current_tab.browser.setUrl(QUrl(url))
+
+    def add_to_history(self, url):
+        if url and (not self.incognito_mode):
+            if len(self.history) == 0 or self.history[-1] != url:
+                self.history.append(url)
+
+    def toggle_incognito_mode(self):
+        self.incognito_mode = not self.incognito_mode
+        self.add_new_tab(incognito=self.incognito_mode)
+
+    def toggle_dark_mode(self):
+        self.dark_mode = not self.dark_mode
+        self.apply_theme()
+
+    def apply_preset_theme(self, theme_name):
+        themes = {
+            "light": {"primary": "#FFFFFF", "text": "#000000", "bg": "#F0F0F0"},
+            "dark": {"primary": "#000000", "text": "#FFFFFF", "bg": "#1E1E1E"},
+            "blue": {"primary": "#2196F3", "text": "#FFFFFF", "bg": "#E3F2FD"},
+            "purple": {"primary": "#9C27B0", "text": "#FFFFFF", "bg": "#F3E5F5"},
+        }
+        if theme_name in themes:
+            theme = themes[theme_name]
+            self.custom_primary_color = theme["primary"]
+            self.dark_mode = (theme_name == "dark")
+            self.apply_theme()
+            self.save_theme()
+
+    def apply_theme(self):
+        if self.dark_mode:
+            bg_color = "#121212"
+            text_color = "#FFFFFF"
+            primary_color = self.custom_primary_color or "#BB86FC"
+        else:
+            bg_color = "#FFFFFF"
+            text_color = "#000000"
+            primary_color = self.custom_primary_color or "#6200EE"
+
+        style = f"""
+            QMainWindow {{
+                background-color: {bg_color};
+                color: {text_color};
+            }}
+            QToolBar {{
+                background-color: {primary_color};
+                color: {text_color};
+            }}
+            QPushButton {{
+                background-color: {primary_color};
+                color: {text_color};
+                border: none;
+                padding: 5px;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background-color: #3700B3;
+            }}
+            QLineEdit {{
+                background-color: #EEEEEE;
+                color: #000000;
+                padding: 5px;
+                border-radius: 3px;
+            }}
+            QListWidget {{
+                background-color: {bg_color};
+                color: {text_color};
+            }}
+        """
+        self.setStyleSheet(style)
+        for i in range(self.tabs.count()):
+            self.apply_theme_to_tab(self.tabs.widget(i))
+
+    def apply_theme_to_tab(self, tab):
+        # Here you can add more per-tab theming if needed
+        pass
+
+    def open_color_picker(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.custom_primary_color = color.name()
+            self.apply_theme()
+            self.save_theme()
+
+    def save_theme(self):
+        try:
+            with open(THEME_FILE, "w") as f:
+                f.write(f"{self.dark_mode},{self.custom_primary_color or ''}\n")
+        except Exception as e:
+            print(f"Error saving theme: {e}")
+
+    def load_theme(self):
+        if os.path.exists(THEME_FILE):
+            try:
+                with open(THEME_FILE, "r") as f:
+                    line = f.readline().strip()
+                    parts = line.split(",")
+                    if len(parts) >= 1:
+                        self.dark_mode = parts[0].lower() == 'true' or parts[0] == '1'
+                    if len(parts) == 2:
+                        self.custom_primary_color = parts[1] if parts[1] else None
+                    self.apply_theme()
+            except Exception as e:
+                print(f"Error loading theme: {e}")
+
+    def show_about(self):
+        about_text = read_about_file()
+        self.about_window = AboutWindow(about_text)
+        self.about_window.show()
+
+def main():
+    app = QApplication(sys.argv)
+    window = Browser()
+    window.show()
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
